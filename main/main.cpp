@@ -8,8 +8,10 @@
 #include "esp_err.h"
 #include "esp_flash.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "wifi_portal.h"
 
 namespace {
 
@@ -164,6 +166,15 @@ void init_button() {
 }  // namespace
 
 extern "C" void app_main() {
+    esp_err_t nvs_result = nvs_flash_init();
+    if (nvs_result == ESP_ERR_NVS_NO_FREE_PAGES ||
+        nvs_result == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    } else {
+        ESP_ERROR_CHECK(nvs_result);
+    }
+
     esp_chip_info_t chip = {};
     esp_chip_info(&chip);
     uint32_t flash_size = 0;
@@ -182,6 +193,8 @@ extern "C" void app_main() {
     ESP_LOGI(kTag, "LCD initialized; green means codec found, red means codec missing");
     ESP_LOGI(kTag, "Hold GPIO42 for RED | GREEN | BLUE | WHITE calibration bars");
 
+    ESP_ERROR_CHECK(wifi_portal_start());
+
     bool previous_pressed = false;
     while (true) {
         const bool pressed = gpio_get_level(kButton) == 0;
@@ -197,4 +210,3 @@ extern "C" void app_main() {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-
