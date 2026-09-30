@@ -1,6 +1,7 @@
 #include <array>
 #include <stdint.h>
 
+#include "aipi_controls.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
@@ -26,7 +27,6 @@ constexpr gpio_num_t kLcdCs = GPIO_NUM_15;
 constexpr gpio_num_t kLcdSclk = GPIO_NUM_16;
 constexpr gpio_num_t kLcdMosi = GPIO_NUM_17;
 constexpr gpio_num_t kLcdReset = GPIO_NUM_18;
-constexpr gpio_num_t kButton = GPIO_NUM_42;
 constexpr uint8_t kEs8311Address = 0x18;
 
 constexpr int kDisplayWidth = 128;
@@ -140,6 +140,19 @@ void lcd_show_color_bars() {
     lcd_fill_rect(96, 0, 32, kDisplayHeight, 0xFFFF);
 }
 
+void lcd_show_button_state(bool left_pressed, bool right_pressed, bool codec_found) {
+    if (left_pressed && right_pressed) {
+        lcd_fill_rect(0, 0, kDisplayWidth, kDisplayHeight / 2, 0xFFE0);
+        lcd_fill_rect(0, kDisplayHeight / 2, kDisplayWidth, kDisplayHeight / 2, 0xF81F);
+    } else if (right_pressed) {
+        lcd_show_color_bars();
+    } else if (left_pressed) {
+        lcd_fill(0xFFE0);
+    } else {
+        lcd_fill(codec_found ? 0x07E0 : 0xF800);
+    }
+}
+
 bool probe_es8311() {
     i2c_master_bus_config_t bus_config = {};
     bus_config.i2c_port = I2C_NUM_0;
@@ -154,14 +167,6 @@ bool probe_es8311() {
     const esp_err_t result = i2c_master_probe(bus, kEs8311Address, 100);
     ESP_ERROR_CHECK(i2c_del_master_bus(bus));
     return result == ESP_OK;
-}
-
-void init_button() {
-    gpio_config_t input = {};
-    input.pin_bit_mask = 1ULL << kButton;
-    input.mode = GPIO_MODE_INPUT;
-    input.pull_up_en = GPIO_PULLUP_ENABLE;
-    ESP_ERROR_CHECK(gpio_config(&input));
 }
 
 }  // namespace
@@ -185,29 +190,31 @@ extern "C" void app_main() {
     ESP_LOGI(kTag, "chip model=%d cores=%d revision=%d flash=%luMB", chip.model, chip.cores,
              chip.revision, static_cast<unsigned long>(flash_size / (1024 * 1024)));
 
-    init_button();
+    ESP_ERROR_CHECK(aipi_controls_init());
+    ESP_LOGI(kTag, "button raw levels at boot: GPIO1=%d GPIO42=%d (idle=1 pressed=0)",
+             aipi_controls_raw_level(kAipiLeftButtonPin),
+             aipi_controls_raw_level(kAipiRightButtonPin));
     const bool codec_found = probe_es8311();
     ESP_LOGI(kTag, "ES8311 at 0x18: %s", codec_found ? "PASS" : "FAIL");
 
     lcd_init();
     lcd_fill(codec_found ? 0x07E0 : 0xF800);
     ESP_LOGI(kTag, "LCD initialized; green means codec found, red means codec missing");
-    ESP_LOGI(kTag, "Hold GPIO42 for RED | GREEN | BLUE | WHITE calibration bars");
+    ESP_LOGI(kTag, "buttons: GPIO1=yellow GPIO42=RGBW both=yellow/magenta");
 
     ESP_ERROR_CHECK(status_led_init());
     ESP_ERROR_CHECK(wifi_portal_start());
 
-    bool previous_pressed = false;
     while (true) {
-        const bool pressed = gpio_get_level(kButton) == 0;
-        if (pressed != previous_pressed) {
-            ESP_LOGI(kTag, "GPIO42: %s", pressed ? "PRESSED" : "RELEASED");
-            if (pressed) {
-                lcd_show_color_bars();
-            } else {
-                lcd_fill(codec_found ? 0x07E0 : 0xF800);
-            }
-            previous_pressed = pressed;
+        const AipiControlsState controls = aipi_controls_poll();
+        if (controls.left_changed) {
+            ESP_LOGI(kTag, "GPIO1 left: %s", controls.left_pressed ? "PRESSED" : "RELEASED");
+        }
+        if (controls.right_changed) {
+            ESP_LOGI(kTag, "GPIO42 right: %s", controls.right_pressed ? "PRESSED" : "RELEASED");
+        }
+        if (controls.left_changed || controls.right_changed) {
+            lcd_show_button_state(controls.left_pressed, controls.right_pressed, codec_found);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }

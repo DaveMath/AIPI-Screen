@@ -6,7 +6,7 @@ exact ST7735-compatible LCD configuration validated on physical hardware after
 correcting color order, orientation, inversion, and visible edge-static
 problems.
 
-The test firmware also checks the ES8311 control bus and GPIO42 button, then
+The test firmware also checks the ES8311 control bus and both onboard buttons, then
 starts a captive setup portal with a nearby-network scanner. It requires no API
 key, bridge, or cloud service.
 
@@ -32,9 +32,11 @@ On boot:
 
 - A full green screen means the ES8311 responded at I2C address `0x18`.
 - A full red screen means the codec probe failed; the LCD is still operating.
+- Hold the left-side GPIO1 button to show a full yellow screen.
 - Hold the right-side GPIO42 button to show four equal vertical bars in this
   order: **red, green, blue, white**.
-- Release the button to return to the codec result screen.
+- Hold both buttons to show yellow over magenta.
+- Release the buttons to return to the codec result screen.
 
 The fixed image fills all 128 x 128 pixels. It does not leave the narrow static
 strip on the left or the short static strip at the upper-left edge produced by
@@ -84,7 +86,7 @@ need to be exercised by this diagnostic image.
 | Audio stream | BCLK | GPIO14 | Shared microphone/speaker bus | Community verified |
 | Audio output | Speaker amplifier | GPIO9 | Disable while recording | Community verified |
 | Input | Right/talk button | GPIO42 | Active-low | Validated |
-| Input | Left/volume button | GPIO1 | Active-low, internal pull-up | Community verified |
+| Input | Left/volume button | GPIO1 | Active-low, internal pull-up | Implemented; physical retest pending |
 | Status | WS2812 data | GPIO46 | One LED, GRB element order | Community verified |
 | Power | Power hold | GPIO10 | Drive high to remain on when battery powered | Community verified |
 | Power | Battery voltage | GPIO2 | ADC; starting divider multiplier `2.5` | Community verified |
@@ -119,11 +121,40 @@ Its left button uses a simple persistent volume sequence:
 Off -> 45% -> 60% -> 70% -> 80% -> Off
 ```
 
-For this repository, the next diagnostic should use GPIO1 to advance through
-hardware-test pages and reserve GPIO42 for the action on each page. A brief
+The diagnostic firmware now reads both buttons through `aipi_controls` and
+changes the display after each accepted press or release. GPIO1 shows yellow,
+GPIO42 shows the RGBW calibration bars, and holding both shows yellow over
+magenta. A brief
 two-button press can show firmware version, station IP, RSSI, battery voltage,
 charge state, codec status, and PSRAM size. A destructive factory reset should
 require a long hold and an on-screen countdown so it cannot happen accidentally.
+
+### Native GPIO rule from Flock-You-Go
+
+The Flock-You-Go integration exposed a portability trap: Arduino-style numeric
+`pinMode()` and `digitalRead()` calls can pass through a board-variant mapping
+instead of addressing the ESP32-S3 GPIO expected by the AiPi schematic. The
+result was a clean build and buttons that never changed the application state.
+
+AiPi firmware must use the native ESP-IDF GPIO API for these controls:
+
+```cpp
+gpio_config_t inputs = {};
+inputs.pin_bit_mask = (1ULL << GPIO_NUM_1) | (1ULL << GPIO_NUM_42);
+inputs.mode = GPIO_MODE_INPUT;
+inputs.pull_up_en = GPIO_PULLUP_ENABLE;
+inputs.pull_down_en = GPIO_PULLDOWN_DISABLE;
+inputs.intr_type = GPIO_INTR_DISABLE;
+ESP_ERROR_CHECK(gpio_config(&inputs));
+
+const bool left_pressed = gpio_get_level(GPIO_NUM_1) == 0;
+const bool right_pressed = gpio_get_level(GPIO_NUM_42) == 0;
+```
+
+Both inputs are active-low: idle is `1` and pressed is `0`. Log both raw levels
+at boot, debounce press and release, and force the visible UI state to redraw
+when a debounced transition is accepted. This distinguishes a wiring or pin-map
+problem from an application state that changed without being rendered.
 
 ## Audio configuration
 
@@ -343,11 +374,11 @@ remain separate operations.
 
 ## Diagnostic acceptance plan
 
-The display and GPIO42 portions have passed. The fuller board test should add
-these pages in order:
+The display and native two-button input path are implemented. The fuller board
+test should add these pages in order:
 
 1. **Display:** edge coverage and red/green/blue/white bars.
-2. **Buttons:** independent GPIO1/GPIO42 state plus simultaneous press.
+2. **Buttons:** physically validate independent GPIO1/GPIO42 state plus simultaneous press.
 3. **LED:** red, green, blue, white at limited brightness.
 4. **Power:** GPIO10 hold behavior on battery and USB.
 5. **Battery:** GPIO2 raw voltage, calibrated voltage, percent, GPIO8 charge state.
@@ -368,14 +399,16 @@ I (...) aipi_screen: AIPI-Screen hardware test
 I (...) aipi_screen: chip model=... cores=2 revision=... flash=16MB
 I (...) aipi_screen: ES8311 at 0x18: PASS
 I (...) aipi_screen: LCD initialized; green means codec found, red means codec missing
-I (...) aipi_screen: Hold GPIO42 for RED | GREEN | BLUE | WHITE calibration bars
+I (...) aipi_screen: buttons: GPIO1=yellow GPIO42=RGBW both=yellow/magenta
 ```
 
-Pressing and releasing the right-side button adds:
+Pressing and releasing the buttons adds:
 
 ```text
-I (...) aipi_screen: GPIO42: PRESSED
-I (...) aipi_screen: GPIO42: RELEASED
+I (...) aipi_screen: GPIO1 left: PRESSED
+I (...) aipi_screen: GPIO1 left: RELEASED
+I (...) aipi_screen: GPIO42 right: PRESSED
+I (...) aipi_screen: GPIO42 right: RELEASED
 ```
 
 ## Project layout
@@ -387,6 +420,8 @@ I (...) aipi_screen: GPIO42: RELEASED
 |-- esp-idf-monitor.cfg       Ctrl-C monitor exit setting
 |-- main/
 |   |-- CMakeLists.txt
+|   |-- aipi_controls.cpp     Native two-button GPIO and debounce implementation
+|   |-- aipi_controls.h       Shared AiPi control pins and state API
 |   |-- main.cpp              Hardware test and direct LCD driver
 |   |-- status_led.cpp        GPIO46 WS2812 RMT driver and brightness control
 |   |-- status_led.h
