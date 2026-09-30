@@ -9,6 +9,7 @@
 #include "esp_flash.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "status_led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "wifi_portal.h"
@@ -193,6 +194,7 @@ extern "C" void app_main() {
     ESP_LOGI(kTag, "LCD initialized; green means codec found, red means codec missing");
     ESP_LOGI(kTag, "Hold GPIO42 for RED | GREEN | BLUE | WHITE calibration bars");
 
+    ESP_ERROR_CHECK(status_led_init());
     ESP_ERROR_CHECK(wifi_portal_start());
 
     bool previous_pressed = false;
