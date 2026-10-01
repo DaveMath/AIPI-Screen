@@ -1,6 +1,7 @@
 #include <array>
 #include <stdint.h>
 
+#include "aipi_battery.h"
 #include "aipi_controls.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -34,6 +35,11 @@ constexpr int kDisplayHeight = 128;
 constexpr uint8_t kMadctl = 0x68;
 
 spi_device_handle_t lcd = nullptr;
+AipiBatteryReading battery_reading = {};
+bool battery_ready = false;
+bool battery_bar_visible = true;
+TickType_t last_battery_read = 0;
+TickType_t last_battery_blink = 0;
 
 void lcd_write(bool data, const void* bytes, size_t length) {
     gpio_set_level(kLcdDc, data ? 1 : 0);
@@ -153,6 +159,67 @@ void lcd_show_button_state(bool left_pressed, bool right_pressed, bool codec_fou
     }
 }
 
+void lcd_show_battery_indicator() {
+    constexpr int x = 8;
+    constexpr int y = 116;
+    constexpr int width = 112;
+    constexpr int height = 8;
+    lcd_fill_rect(x, y, width, height, 0x4208);
+    lcd_fill_rect(x + 1, y + 1, width - 2, height - 2, 0x0000);
+    if (!battery_ready || (!battery_bar_visible && battery_reading.charging &&
+                           battery_reading.percent < 50)) {
+        return;
+    }
+
+    const int fill_width = ((width - 2) * battery_reading.percent) / 100;
+    const uint16_t color = battery_reading.percent < 10
+                               ? 0xF800
+                               : (battery_reading.percent < 50 ? 0xFFE0 : 0x07E0);
+    if (fill_width > 0) {
+        lcd_fill_rect(x + 1, y + 1, fill_width, height - 2, color);
+    }
+    if (battery_reading.charging) {
+        lcd_fill_rect(x + width - 5, y + 2, 3, height - 4, 0xFFFF);
+    }
+}
+
+void update_battery(bool force = false) {
+    if (!battery_ready) return;
+    const TickType_t now = xTaskGetTickCount();
+    const bool charging_changed = aipi_battery_is_charging() != battery_reading.charging;
+    if (!force && !charging_changed && now - last_battery_read < pdMS_TO_TICKS(30000)) {
+        return;
+    }
+
+    AipiBatteryReading reading = {};
+    const esp_err_t result = aipi_battery_read(&reading);
+    last_battery_read = now;
+    if (result != ESP_OK) {
+        ESP_LOGE(kTag, "battery read failed: %s", esp_err_to_name(result));
+        return;
+    }
+
+    battery_reading = reading;
+    battery_bar_visible = true;
+    last_battery_blink = now;
+    ESP_LOGI(kTag, "battery=%lu.%03luV percent=%u charging=%d adc_calibrated=%d",
+             static_cast<unsigned long>(reading.millivolts / 1000),
+             static_cast<unsigned long>(reading.millivolts % 1000), reading.percent,
+             reading.charging ? 1 : 0, reading.calibrated ? 1 : 0);
+    lcd_show_battery_indicator();
+}
+
+void tick_battery_indicator() {
+    update_battery();
+    if (!battery_ready || !battery_reading.charging || battery_reading.percent >= 50) return;
+    const TickType_t now = xTaskGetTickCount();
+    if (now - last_battery_blink >= pdMS_TO_TICKS(600)) {
+        battery_bar_visible = !battery_bar_visible;
+        last_battery_blink = now;
+        lcd_show_battery_indicator();
+    }
+}
+
 bool probe_es8311() {
     i2c_master_bus_config_t bus_config = {};
     bus_config.i2c_port = I2C_NUM_0;
@@ -190,6 +257,11 @@ extern "C" void app_main() {
     ESP_LOGI(kTag, "chip model=%d cores=%d revision=%d flash=%luMB", chip.model, chip.cores,
              chip.revision, static_cast<unsigned long>(flash_size / (1024 * 1024)));
 
+    const esp_err_t battery_result = aipi_battery_init();
+    battery_ready = battery_result == ESP_OK;
+    if (!battery_ready) {
+        ESP_LOGE(kTag, "battery setup failed: %s", esp_err_to_name(battery_result));
+    }
     ESP_ERROR_CHECK(aipi_controls_init());
     ESP_LOGI(kTag, "button raw levels at boot: GPIO1=%d GPIO42=%d (idle=1 pressed=0)",
              aipi_controls_raw_level(kAipiLeftButtonPin),
@@ -199,6 +271,8 @@ extern "C" void app_main() {
 
     lcd_init();
     lcd_fill(codec_found ? 0x07E0 : 0xF800);
+    update_battery(true);
+    lcd_show_battery_indicator();
     ESP_LOGI(kTag, "LCD initialized; green means codec found, red means codec missing");
     ESP_LOGI(kTag, "buttons: GPIO1=yellow GPIO42=RGBW both=yellow/magenta");
 
@@ -215,7 +289,9 @@ extern "C" void app_main() {
         }
         if (controls.left_changed || controls.right_changed) {
             lcd_show_button_state(controls.left_pressed, controls.right_pressed, codec_found);
+            lcd_show_battery_indicator();
         }
+        tick_battery_indicator();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

@@ -37,6 +37,9 @@ On boot:
   order: **red, green, blue, white**.
 - Hold both buttons to show yellow over magenta.
 - Release the buttons to return to the codec result screen.
+- The bottom battery bar is green at 50% or above, yellow from 10-49%, and
+  red below 10%. A white marker means GPIO8 reports charging; below 50% the
+  bar blinks every 600 ms while charging.
 
 The fixed image fills all 128 x 128 pixels. It does not leave the narrow static
 strip on the left or the short static strip at the upper-left edge produced by
@@ -88,14 +91,14 @@ need to be exercised by this diagnostic image.
 | Input | Right/talk button | GPIO42 | Active-low | Validated |
 | Input | Left/volume button | GPIO1 | Active-low, internal pull-up | Implemented; physical retest pending |
 | Status | WS2812 data | GPIO46 | One LED, GRB element order | Community verified |
-| Power | Power hold | GPIO10 | Drive high to remain on when battery powered | Community verified |
-| Power | Battery voltage | GPIO2 | ADC; starting divider multiplier `2.5` | Community verified |
-| Power | Charge status | GPIO8 | Active-low input with pull-up | Community verified |
+| Power | Power hold | GPIO10 | Driven high at startup | Implemented; battery retest pending |
+| Power | Battery voltage | GPIO2 | ADC1 channel 1, 12 dB, 10-sample average, multiplier `2.5` | Implemented; calibration pending |
+| Power | Charge status | GPIO8 | Active-low input with pull-up | Implemented; battery retest pending |
 
-`Community verified` means the setting appears in a working AIPI Lite project,
-especially WalkieClaw, but has not yet passed this repository's own physical
-acceptance test. GPIO10 deserves special care: changing the power-hold signal
-can switch the device off when it is running from the battery module.
+`Community verified` means the setting appears in working AIPI Lite firmware
+but has not yet passed this repository's own physical acceptance test. GPIO10
+deserves special care: changing the power-hold signal can switch the device off
+when it is running from the battery module.
 
 ## Two-button controls
 
@@ -109,11 +112,9 @@ external controls:
 | Both buttons | GPIO42 + GPIO1 | Diagnostic overlay | Brief press shows device information |
 | Both, long hold | GPIO42 + GPIO1 | Not defined upstream | Clear Wi-Fi configuration after confirmation |
 
-WalkieClaw debounces GPIO42 by 200 ms in both directions and GPIO1 by 100 ms.
-Its right-button behavior is particularly useful for an assistant state
-machine: pressing while idle starts recording, pressing during playback
-interrupts the audio, and pressing while processing abandons the old response
-before beginning a new recording.
+The reference control module debounces GPIO42 by 200 ms in both directions and
+GPIO1 by 100 ms. A useful assistant state machine can start recording from idle,
+interrupt playback, or abandon processing before beginning a new recording.
 
 Its left button uses a simple persistent volume sequence:
 
@@ -129,12 +130,12 @@ two-button press can show firmware version, station IP, RSSI, battery voltage,
 charge state, codec status, and PSRAM size. A destructive factory reset should
 require a long hold and an on-screen countdown so it cannot happen accidentally.
 
-### Native GPIO rule from Flock-You-Go
+### Native GPIO addressing rule
 
-The Flock-You-Go integration exposed a portability trap: Arduino-style numeric
-`pinMode()` and `digitalRead()` calls can pass through a board-variant mapping
-instead of addressing the ESP32-S3 GPIO expected by the AiPi schematic. The
-result was a clean build and buttons that never changed the application state.
+Arduino-style numeric `pinMode()` and `digitalRead()` calls can pass through a
+board-variant mapping instead of addressing the ESP32-S3 GPIO expected by the
+AiPi schematic. The result can be a clean build and buttons that never change
+the application state.
 
 AiPi firmware must use the native ESP-IDF GPIO API for these controls:
 
@@ -174,7 +175,7 @@ Known working community settings:
 | Speaker gate | GPIO9 |
 
 The microphone and speaker share clocks and codec state, so mode changes need
-an explicit sequence. A conservative transition based on WalkieClaw is:
+an explicit sequence. A conservative transition is:
 
 1. Stop playback or wake-word processing.
 2. Disable the GPIO9 speaker amplifier.
@@ -183,8 +184,8 @@ an explicit sequence. A conservative transition based on WalkieClaw is:
 5. Wait about 500 ms before enabling the speaker amplifier.
 6. Restore the ES8311 DAC state, then wait 100-300 ms before playback.
 
-WalkieClaw restores DAC volume/control with ES8311 registers `0x32` and `0x37`
-before playback. Those writes should be verified against our board and codec
+Working firmware restores DAC volume/control with ES8311 registers `0x32` and
+`0x37` before playback. Those writes should be verified against our board and codec
 initialization before they become part of the native driver. Do not write
 unrelated ES8311 registers speculatively; microphone and DAC paths share state.
 
@@ -219,10 +220,13 @@ assert it early in startup and keep it high until an intentional shutdown.
 Dropping it can remove power from the board. USB-powered display development
 may hide this behavior, so it needs a separate unplugged test.
 
-WalkieClaw reads battery voltage through GPIO2 with 12 dB ADC attenuation, ten
-samples, and a starting voltage-divider multiplier of `2.5`. That multiplier
-must be calibrated against a multimeter for each hardware revision. Its
-piecewise LiPo estimate uses these reference points:
+The native `aipi_battery` module implements the board's battery model. It
+asserts GPIO10 at startup, reads GPIO2 through ADC1 channel 1 with 12 dB
+attenuation, averages ten samples, and applies a starting voltage-divider
+multiplier of `2.5`. ESP-IDF curve-fitting calibration is used when available;
+otherwise the driver reports that its voltage estimate is uncalibrated. The
+`2.5` multiplier still must be checked against a multimeter for each hardware
+revision. The piecewise LiPo estimate uses these reference points:
 
 | Cell voltage | Approximate charge |
 |---:|---:|
@@ -234,13 +238,15 @@ piecewise LiPo estimate uses these reference points:
 | 3.50 V | 10% |
 | 3.30 V | 0% |
 
-GPIO8 reports charging state as an active-low input. Useful behavior is to
-refresh battery data when that state changes, blink the battery indicator while
-charging below 50%, and reset the sleep timer when external power is removed.
+GPIO8 reports charging state as an active-low input. Firmware samples the
+battery every 30 seconds and immediately when charge state changes. The bottom
+screen bar uses red/yellow/green thresholds and blinks every 600 ms
+while charging below 50%. Serial output includes voltage, percentage, charging
+state, and whether eFuse-backed ADC calibration was available.
 
-WalkieClaw's configured sleep timeout is `1,800,000 ms`, which is 30 minutes,
-despite one nearby comment calling it five minutes. Native code should define
-the duration once and derive both behavior and display text from that value.
+The recommended sleep timeout is `1,800,000 ms`, or 30 minutes. Native code
+should define the duration once and derive both behavior and display text from
+that value.
 
 ## Memory and platform settings
 
@@ -343,10 +349,10 @@ Technical details:
 | Captive detection | Local DNS redirects host lookups to `1.2.3.4` |
 | Resilience | Setup AP restored after five failed station reconnects |
 
-WalkieClaw also demonstrates two-network roaming: a home network at higher
-priority and a phone hotspot as fallback. That remains a useful next step; the
-current native portal stores one station network and recovers by reopening its
-setup AP when that network cannot be reached.
+Two-network roaming, with a home network at higher priority and a phone hotspot
+as fallback, remains a useful next step. The current native portal stores one
+station network and recovers by reopening its setup AP when that network cannot
+be reached.
 
 ## Suggested settings model
 
@@ -380,8 +386,8 @@ test should add these pages in order:
 1. **Display:** edge coverage and red/green/blue/white bars.
 2. **Buttons:** physically validate independent GPIO1/GPIO42 state plus simultaneous press.
 3. **LED:** red, green, blue, white at limited brightness.
-4. **Power:** GPIO10 hold behavior on battery and USB.
-5. **Battery:** GPIO2 raw voltage, calibrated voltage, percent, GPIO8 charge state.
+4. **Power:** physically validate GPIO10 hold behavior on battery and USB.
+5. **Battery:** calibrate GPIO2 voltage and physically validate percentage and GPIO8 charge state.
 6. **Codec:** I2C address and selected ES8311 register readback.
 7. **Microphone:** live peak/RMS meter without speaker enabled.
 8. **Speaker:** short generated tone after the safe audio transition.
@@ -398,6 +404,7 @@ test passes.
 I (...) aipi_screen: AIPI-Screen hardware test
 I (...) aipi_screen: chip model=... cores=2 revision=... flash=16MB
 I (...) aipi_screen: ES8311 at 0x18: PASS
+I (...) aipi_screen: battery=4.012V percent=78 charging=0 adc_calibrated=1
 I (...) aipi_screen: LCD initialized; green means codec found, red means codec missing
 I (...) aipi_screen: buttons: GPIO1=yellow GPIO42=RGBW both=yellow/magenta
 ```
@@ -420,6 +427,8 @@ I (...) aipi_screen: GPIO42 right: RELEASED
 |-- esp-idf-monitor.cfg       Ctrl-C monitor exit setting
 |-- main/
 |   |-- CMakeLists.txt
+|   |-- aipi_battery.cpp      Power hold, ADC averaging, charge state, LiPo curve
+|   |-- aipi_battery.h        Shared battery reading API
 |   |-- aipi_controls.cpp     Native two-button GPIO and debounce implementation
 |   |-- aipi_controls.h       Shared AiPi control pins and state API
 |   |-- main.cpp              Hardware test and direct LCD driver
@@ -432,8 +441,6 @@ I (...) aipi_screen: GPIO42 right: RELEASED
 
 ## Community references
 
-- [WalkieClaw](https://github.com/slsah30/WalkieClaw) for AIPI Lite application
-  patterns and the 128 x 128 display context.
 - [AIPI-Lite-ESPHome](https://github.com/sticks918/AIPI-Lite-ESPHome) for the
   board pin map and ESPHome bring-up.
 - [AIPI-Lite-Voice-Bridge](https://github.com/noise754/AIPI-Lite-Voice-Bridge)
