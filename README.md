@@ -140,6 +140,9 @@ the application state.
 AiPi firmware must use the native ESP-IDF GPIO API for these controls:
 
 ```cpp
+ESP_ERROR_CHECK(gpio_reset_pin(GPIO_NUM_1));
+ESP_ERROR_CHECK(gpio_reset_pin(GPIO_NUM_42));
+
 gpio_config_t inputs = {};
 inputs.pin_bit_mask = (1ULL << GPIO_NUM_1) | (1ULL << GPIO_NUM_42);
 inputs.mode = GPIO_MODE_INPUT;
@@ -147,6 +150,8 @@ inputs.pull_up_en = GPIO_PULLUP_ENABLE;
 inputs.pull_down_en = GPIO_PULLDOWN_DISABLE;
 inputs.intr_type = GPIO_INTR_DISABLE;
 ESP_ERROR_CHECK(gpio_config(&inputs));
+ESP_ERROR_CHECK(gpio_pullup_en(GPIO_NUM_1));
+ESP_ERROR_CHECK(gpio_pullup_en(GPIO_NUM_42));
 
 const bool left_pressed = gpio_get_level(GPIO_NUM_1) == 0;
 const bool right_pressed = gpio_get_level(GPIO_NUM_42) == 0;
@@ -156,6 +161,30 @@ Both inputs are active-low: idle is `1` and pressed is `0`. Log both raw levels
 at boot, debounce press and release, and force the visible UI state to redraw
 when a debounced transition is accepted. This distinguishes a wiring or pin-map
 problem from an application state that changed without being rendered.
+
+### Cross-project button regression finding
+
+An AiPi application can build, flash, and render normally while both controls
+appear dead if GPIO1 or GPIO42 retains an earlier boot/debug pad configuration.
+The reusable initialization sequence now resets both pads, configures them
+together as active-low inputs, and explicitly re-enables both pull-ups. Both
+buttons use a 35 ms debounce interval so a normal short press is accepted
+without making the UI feel delayed.
+
+Every raw electrical transition is logged before debounce. Validation should
+therefore happen in this order:
+
+1. Confirm boot reports idle levels `GPIO1=1` and `GPIO42=1`.
+2. Confirm a press logs raw level `0` and release logs raw level `1`.
+3. Confirm the debounced state changes after at least 35 ms.
+4. Confirm the application redraws the display from the accepted transition.
+
+GPIO42 is physically validated as the right button. GPIO1 is the established
+left-button mapping but remains flagged for a direct physical retest. The
+reset-and-reassert sequence is a regression hardening change discovered while
+integrating battery monitoring in another AiPi firmware and also requires a
+final physical retest on each board revision. Battery GPIO2 ADC, GPIO8 charge
+status, and GPIO10 power hold do not overlap either button pin.
 
 ## Audio configuration
 

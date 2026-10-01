@@ -1,9 +1,13 @@
 #include "aipi_controls.h"
 
+#include "esp_check.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 namespace {
+
+constexpr char kTag[] = "aipi_controls";
 
 struct DebouncedButton {
     gpio_num_t pin;
@@ -15,7 +19,7 @@ struct DebouncedButton {
 
 DebouncedButton left_button = {
     .pin = kAipiLeftButtonPin,
-    .debounce_ticks = pdMS_TO_TICKS(100),
+    .debounce_ticks = pdMS_TO_TICKS(35),
     .raw_pressed = false,
     .stable_pressed = false,
     .raw_changed_at = 0,
@@ -23,7 +27,7 @@ DebouncedButton left_button = {
 
 DebouncedButton right_button = {
     .pin = kAipiRightButtonPin,
-    .debounce_ticks = pdMS_TO_TICKS(200),
+    .debounce_ticks = pdMS_TO_TICKS(35),
     .raw_pressed = false,
     .stable_pressed = false,
     .raw_changed_at = 0,
@@ -38,6 +42,8 @@ bool poll_button(DebouncedButton* button, TickType_t now) {
     if (raw_pressed != button->raw_pressed) {
         button->raw_pressed = raw_pressed;
         button->raw_changed_at = now;
+        ESP_LOGI(kTag, "GPIO%d raw=%s", static_cast<int>(button->pin),
+                 raw_pressed ? "pressed" : "released");
     }
 
     if (button->stable_pressed != button->raw_pressed &&
@@ -51,6 +57,13 @@ bool poll_button(DebouncedButton* button, TickType_t now) {
 }  // namespace
 
 esp_err_t aipi_controls_init() {
+    // GPIO1 and GPIO42 can retain boot/debug configuration. Reset both pads
+    // before assigning them to the AiPi's active-low buttons.
+    ESP_RETURN_ON_ERROR(gpio_reset_pin(kAipiLeftButtonPin), kTag,
+                        "reset left button GPIO");
+    ESP_RETURN_ON_ERROR(gpio_reset_pin(kAipiRightButtonPin), kTag,
+                        "reset right button GPIO");
+
     gpio_config_t inputs = {};
     inputs.pin_bit_mask = (1ULL << kAipiLeftButtonPin) | (1ULL << kAipiRightButtonPin);
     inputs.mode = GPIO_MODE_INPUT;
@@ -62,6 +75,10 @@ esp_err_t aipi_controls_init() {
     if (result != ESP_OK) {
         return result;
     }
+    ESP_RETURN_ON_ERROR(gpio_pullup_en(kAipiLeftButtonPin), kTag,
+                        "enable left button pull-up");
+    ESP_RETURN_ON_ERROR(gpio_pullup_en(kAipiRightButtonPin), kTag,
+                        "enable right button pull-up");
 
     const TickType_t now = xTaskGetTickCount();
     left_button.raw_pressed = read_pressed(left_button.pin);
