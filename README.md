@@ -188,9 +188,11 @@ status, and GPIO10 power hold do not overlap either button pin.
 
 ## Audio configuration
 
-The ES8311 is both the microphone ADC and speaker DAC. The current image proves
-only that its control interface responds at I2C address `0x18`; it does not yet
-prove acoustic microphone capture or audible playback.
+The ES8311 is both the microphone ADC and speaker DAC. Its control interface at
+I2C address `0x18` and its speaker output path are physically validated. The
+native diagnostic now cycles `MUTE`, `10%`, `50%`, and `100%` on GPIO42 presses:
+10% plays a short chirp, 50% plays a two-pulse beep, and 100% plays a rising
+two-tone alert. Microphone capture remains a separate validation item.
 
 Known working community settings:
 
@@ -198,10 +200,15 @@ Known working community settings:
 |---|---|
 | Sample rate | 16 kHz |
 | Sample format | Signed 16-bit PCM |
-| Channels | Mono |
+| Channels | Duplicated mono in 16-bit stereo I2S slots |
 | Codec control | I2C address `0x18` |
 | I2S pins | MCLK 6, DOUT 11, LRCLK 12, DIN 13, BCLK 14 |
 | Speaker gate | GPIO9 |
+
+The validated speaker implementation derives the ES8311 clock from the 64x BCLK
+and does not drive GPIO6 MCLK. GPIO9 is high only during bounded playback; the
+DAC is muted and the amplifier is low while idle. A 40 ms silence tail plus a
+60 ms DMA-drain delay prevents the final short tone from being cut off.
 
 The microphone and speaker share clocks and codec state, so mode changes need
 an explicit sequence. A conservative transition is:
@@ -213,10 +220,10 @@ an explicit sequence. A conservative transition is:
 5. Wait about 500 ms before enabling the speaker amplifier.
 6. Restore the ES8311 DAC state, then wait 100-300 ms before playback.
 
-Working firmware restores DAC volume/control with ES8311 registers `0x32` and
-`0x37` before playback. Those writes should be verified against our board and codec
-initialization before they become part of the native driver. Do not write
-unrelated ES8311 registers speculatively; microphone and DAC paths share state.
+The native driver initializes DAC volume/control with ES8311 registers `0x32`
+and `0x37`, streams signed 16-bit PCM on GPIO11, and gates the amplifier on
+GPIO9. Do not write unrelated ES8311 registers speculatively; microphone and
+DAC paths share state.
 
 ## LED color control and status language
 

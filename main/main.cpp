@@ -1,6 +1,7 @@
 #include <array>
 #include <stdint.h>
 
+#include "aipi_audio.h"
 #include "aipi_battery.h"
 #include "aipi_controls.h"
 #include "driver/gpio.h"
@@ -38,6 +39,8 @@ spi_device_handle_t lcd = nullptr;
 AipiBatteryReading battery_reading = {};
 bool battery_ready = false;
 bool battery_bar_visible = true;
+constexpr uint8_t kAudioLevels[] = {0, 10, 50, 100};
+size_t audio_level_index = 0;
 TickType_t last_battery_read = 0;
 TickType_t last_battery_blink = 0;
 
@@ -268,6 +271,8 @@ extern "C" void app_main() {
              aipi_controls_raw_level(kAipiRightButtonPin));
     const bool codec_found = probe_es8311();
     ESP_LOGI(kTag, "ES8311 at 0x18: %s", codec_found ? "PASS" : "FAIL");
+    const esp_err_t audio_result = codec_found ? aipi_audio_init() : ESP_ERR_NOT_FOUND;
+    ESP_LOGI(kTag, "ES8311 speaker playback: %s", esp_err_to_name(audio_result));
 
     lcd_init();
     lcd_fill(codec_found ? 0x07E0 : 0xF800);
@@ -286,6 +291,16 @@ extern "C" void app_main() {
         }
         if (controls.right_changed) {
             ESP_LOGI(kTag, "GPIO42 right: %s", controls.right_pressed ? "PRESSED" : "RELEASED");
+            if (controls.right_pressed && aipi_audio_ready()) {
+                audio_level_index = (audio_level_index + 1) %
+                    (sizeof(kAudioLevels) / sizeof(kAudioLevels[0]));
+                const uint8_t volume = kAudioLevels[audio_level_index];
+                ESP_LOGI(kTag, "speaker sample volume=%u%%", volume);
+                const esp_err_t sample_result = aipi_audio_play_volume_sample(volume);
+                if (sample_result != ESP_OK) {
+                    ESP_LOGE(kTag, "speaker sample failed: %s", esp_err_to_name(sample_result));
+                }
+            }
         }
         if (controls.left_changed || controls.right_changed) {
             lcd_show_button_state(controls.left_pressed, controls.right_pressed, codec_found);
