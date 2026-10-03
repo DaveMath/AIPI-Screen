@@ -26,6 +26,23 @@ subscription, bridge, or cloud account required for the hardware test and
 local setup features. The repository is released under the included MIT
 license.
 
+## Feature Reference
+
+This is the current reusable hardware baseline. The validation image exercises
+the display and device-facing paths; product firmware can selectively adopt
+the modules listed below.
+
+| Feature | What is covered | Reference location |
+|---|---|---|
+| LCD | 128 x 128 ST7735 initialization, orientation, BGR color order, RGB565 byte swapping, no panel offsets | `main/main.cpp`, `DISPLAY_FIX.md` |
+| Buttons | Native GPIO1/GPIO42 addressing, active-low debounce, short presses, long holds, redraw discipline | `aipi_controls.*`, Two-button controls |
+| Audio | ES8311 control-bus probe, I2S speaker routing, amplifier gating, volume test tones | `aipi_audio.*` |
+| Battery and power | ADC voltage estimate, charge indication, power-hold control, battery display bar | `aipi_battery.*`, Power and battery |
+| Backlight | User-selectable 1-minute, 5-minute, or never sleep behavior | `main/main.cpp`, Screen sleep |
+| Shutdown | Optional GPIO1 short-press handoff, hold threshold, cancelable countdown, deep sleep and button wake | Optional GPIO1 shutdown pattern |
+| Wi-Fi setup | Phone-accessible captive portal, passive nearby-network list, password entry, saved station configuration | Wi-Fi setup portal |
+| Status LED | GPIO46 GRB WS2812 color output | `status_led.*` |
+
 ## Reuse In Another AiPi App
 
 Treat this repository as the validated hardware reference for any new
