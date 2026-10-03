@@ -137,6 +137,32 @@ two seconds through `1 MIN`, `5 MIN`, and `NEVER`. Release to save. The color
 diagnostic shows yellow for 1 minute, cyan for 5 minutes, magenta for never,
 and green briefly after saving. Any button press wakes the backlight.
 
+### Optional GPIO1 shutdown pattern
+
+`main/main.cpp` also contains a reusable, disabled-by-default shutdown state
+machine for applications that want a physical `SCAN/OFF`-style left control.
+Set `AIPI_ENABLE_LEFT_SHUTDOWN=1` in the application build configuration to
+enable it. GPIO1 then shows a three-second release-to-confirm sequence:
+
+| Hold state | Diagnostic color | Product UI meaning |
+|---|---|---|
+| Start | Yellow | `OFF IN 3` |
+| 1 second | Gold | `OFF IN 2` |
+| 2 seconds | Red | `OFF IN 1` |
+| 3 seconds | Magenta | `GOODBYE - RELEASE TO OFF` |
+
+Release before the magenta state to cancel and return to the normal diagnostic.
+Release after it to stop Wi-Fi, switch off the backlight, and enter ESP32-S3
+deep sleep. GPIO1 is configured as the active-low EXT1 wake source, so the
+next left-button press boots the application again. The release requirement is
+essential: entering sleep while the active-low wake button is still held would
+otherwise wake the chip immediately.
+
+The helper `screen_wake()` resets the selected `1 MIN`, `5 MIN`, or `NEVER`
+timeout when a real application encounter wakes the panel. Do not call it for
+every repeated packet or sensor update; wake once for the encounter and let the
+configured timeout expire normally.
+
 ### Native GPIO addressing rule
 
 Arduino-style numeric `pinMode()` and `digitalRead()` calls can pass through a

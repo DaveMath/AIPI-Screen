@@ -11,6 +11,8 @@
 #include "esp_err.h"
 #include "esp_flash.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
+#include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "status_led.h"
 #include "freertos/FreeRTOS.h"
@@ -20,6 +22,12 @@
 namespace {
 
 constexpr char kTag[] = "aipi_screen";
+
+// Optional reusable power-control pattern. Keep disabled in the standalone
+// hardware diagnostic; applications can enable it in their build settings.
+#ifndef AIPI_ENABLE_LEFT_SHUTDOWN
+#define AIPI_ENABLE_LEFT_SHUTDOWN 0
+#endif
 
 constexpr gpio_num_t kBacklight = GPIO_NUM_3;
 constexpr gpio_num_t kI2cScl = GPIO_NUM_4;
@@ -44,6 +52,7 @@ constexpr uint8_t kScreenTimeoutMinutes[] = {1, 5, 0};
 constexpr TickType_t kScreenTimeoutHoldTicks = pdMS_TO_TICKS(2000);
 constexpr TickType_t kScreenTimeoutCycleTicks = pdMS_TO_TICKS(2000);
 constexpr TickType_t kScreenSaveConfirmationTicks = pdMS_TO_TICKS(1500);
+constexpr TickType_t kShutdownHoldTicks = pdMS_TO_TICKS(3000);
 size_t audio_level_index = 0;
 size_t screen_timeout_index = 0;
 TickType_t last_battery_read = 0;
@@ -51,8 +60,11 @@ TickType_t last_battery_blink = 0;
 TickType_t screen_last_activity = 0;
 TickType_t right_pressed_at = 0;
 TickType_t right_next_cycle_at = 0;
+TickType_t left_pressed_at = 0;
+uint8_t left_shutdown_countdown_shown = 0xff;
 TickType_t screen_confirmation_until = 0;
 bool right_long_press_active = false;
+bool left_shutdown_armed = false;
 bool screen_backlight_on = true;
 bool screen_overlay_active = false;
 
@@ -180,6 +192,15 @@ void lcd_show_sleep_selection(uint8_t timeout_minutes) {
     lcd_fill(timeout_minutes == 1 ? 0xFFE0 : (timeout_minutes == 5 ? 0x07FF : 0xF81F));
 }
 
+void lcd_show_shutdown_countdown(uint8_t seconds_remaining) {
+    // Text-free diagnostic convention: yellow=3, gold=2, red=1, magenta=goodbye.
+    const uint16_t color = seconds_remaining == 3 ? 0xFFE0
+                           : seconds_remaining == 2 ? 0xFD20
+                           : seconds_remaining == 1 ? 0xF800
+                                                    : 0xF81F;
+    lcd_fill(color);
+}
+
 void lcd_show_battery_indicator() {
     constexpr int x = 8;
     constexpr int y = 116;
@@ -269,6 +290,20 @@ void screen_timeout_tick(bool codec_found) {
     screen_backlight_on = false;
 }
 
+#if AIPI_ENABLE_LEFT_SHUTDOWN
+[[noreturn]] void shutdown_to_deep_sleep() {
+    ESP_LOGI(kTag, "GPIO1 shutdown confirmed; entering deep sleep");
+    ESP_ERROR_CHECK(esp_wifi_stop());
+    gpio_set_level(kBacklight, 0);
+    screen_backlight_on = false;
+    ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(1ULL << kAipiLeftButtonPin,
+                                                  ESP_EXT1_WAKEUP_ANY_LOW));
+    vTaskDelay(pdMS_TO_TICKS(25));
+    esp_deep_sleep_start();
+    __builtin_unreachable();
+}
+#endif
+
 bool probe_es8311() {
     i2c_master_bus_config_t bus_config = {};
     bus_config.i2c_port = I2C_NUM_0;
@@ -335,9 +370,24 @@ extern "C" void app_main() {
         const AipiControlsState controls = aipi_controls_poll();
         if (controls.left_changed) {
             ESP_LOGI(kTag, "GPIO1 left: %s", controls.left_pressed ? "PRESSED" : "RELEASED");
+#if AIPI_ENABLE_LEFT_SHUTDOWN
             if (controls.left_pressed) {
+                left_pressed_at = xTaskGetTickCount();
+                left_shutdown_armed = false;
+                left_shutdown_countdown_shown = 3;
                 screen_wake();
+                screen_overlay_active = true;
+                lcd_show_shutdown_countdown(3);
+            } else if (left_shutdown_armed) {
+                shutdown_to_deep_sleep();
+            } else {
+                screen_overlay_active = false;
+                lcd_fill(codec_found ? 0x07E0 : 0xF800);
+                lcd_show_battery_indicator();
             }
+#else
+            if (controls.left_pressed) screen_wake();
+#endif
         }
         if (controls.right_changed) {
             ESP_LOGI(kTag, "GPIO42 right: %s", controls.right_pressed ? "PRESSED" : "RELEASED");
@@ -367,6 +417,22 @@ extern "C" void app_main() {
             }
         }
         const TickType_t now = xTaskGetTickCount();
+#if AIPI_ENABLE_LEFT_SHUTDOWN
+        if (controls.left_pressed && !left_shutdown_armed) {
+            const TickType_t elapsed = now - left_pressed_at;
+            const uint8_t remaining = elapsed >= kShutdownHoldTicks
+                                          ? 0
+                                          : static_cast<uint8_t>(3 - (elapsed / pdMS_TO_TICKS(1000)));
+            if (remaining != left_shutdown_countdown_shown) {
+                left_shutdown_countdown_shown = remaining;
+                lcd_show_shutdown_countdown(remaining);
+            }
+            if (elapsed >= kShutdownHoldTicks) {
+                left_shutdown_armed = true;
+                ESP_LOGI(kTag, "GPIO1 shutdown armed; release to confirm");
+            }
+        }
+#endif
         if (controls.right_pressed && !right_long_press_active &&
             now - right_pressed_at >= kScreenTimeoutHoldTicks) {
             screen_timeout_index = (screen_timeout_index + 1) %
