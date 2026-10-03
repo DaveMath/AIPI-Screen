@@ -69,6 +69,8 @@ bool right_long_press_active = false;
 bool left_shutdown_countdown_active = false;
 bool left_shutdown_armed = false;
 bool screen_backlight_on = true;
+bool left_wake_only = false;
+bool right_wake_only = false;
 bool screen_overlay_active = false;
 
 void lcd_write(bool data, const void* bytes, size_t length) {
@@ -269,12 +271,14 @@ void tick_battery_indicator() {
     }
 }
 
-void screen_wake() {
+bool screen_wake() {
+    const bool woke_screen = !screen_backlight_on;
     screen_last_activity = xTaskGetTickCount();
     if (!screen_backlight_on) {
         gpio_set_level(kBacklight, 1);
         screen_backlight_on = true;
     }
+    return woke_screen;
 }
 
 void screen_timeout_tick(bool codec_found) {
@@ -375,11 +379,14 @@ extern "C" void app_main() {
             ESP_LOGI(kTag, "GPIO1 left: %s", controls.left_pressed ? "PRESSED" : "RELEASED");
 #if AIPI_ENABLE_LEFT_SHUTDOWN
             if (controls.left_pressed) {
+                left_wake_only = screen_wake();
                 left_pressed_at = xTaskGetTickCount();
                 left_shutdown_armed = false;
                 left_shutdown_countdown_active = false;
                 left_shutdown_countdown_shown = 0xff;
-                screen_wake();
+            } else if (left_wake_only) {
+                left_wake_only = false;
+                ESP_LOGI(kTag, "GPIO1 consumed as screen wake");
             } else if (left_shutdown_armed) {
                 shutdown_to_deep_sleep();
             } else {
@@ -392,16 +399,23 @@ extern "C" void app_main() {
                 lcd_show_battery_indicator();
             }
 #else
-            if (controls.left_pressed) screen_wake();
+            if (controls.left_pressed) left_wake_only = screen_wake();
+            else if (left_wake_only) {
+                left_wake_only = false;
+                ESP_LOGI(kTag, "GPIO1 consumed as screen wake");
+            }
 #endif
         }
         if (controls.right_changed) {
             ESP_LOGI(kTag, "GPIO42 right: %s", controls.right_pressed ? "PRESSED" : "RELEASED");
             if (controls.right_pressed) {
+                right_wake_only = screen_wake();
                 right_pressed_at = xTaskGetTickCount();
                 right_next_cycle_at = 0;
                 right_long_press_active = false;
-                screen_wake();
+            } else if (right_wake_only) {
+                right_wake_only = false;
+                ESP_LOGI(kTag, "GPIO42 consumed as screen wake");
             } else if (right_long_press_active) {
                 screen_wake();
                 right_long_press_active = false;
@@ -424,7 +438,7 @@ extern "C" void app_main() {
         }
         const TickType_t now = xTaskGetTickCount();
 #if AIPI_ENABLE_LEFT_SHUTDOWN
-        if (controls.left_pressed && !left_shutdown_armed) {
+        if (controls.left_pressed && !left_wake_only && !left_shutdown_armed) {
             if (!left_shutdown_countdown_active && now - left_pressed_at >= kShutdownHoldTicks) {
                 left_shutdown_countdown_active = true;
                 left_shutdown_countdown_started_at = now;
@@ -449,7 +463,7 @@ extern "C" void app_main() {
             }
         }
 #endif
-        if (controls.right_pressed && !right_long_press_active &&
+        if (controls.right_pressed && !right_wake_only && !right_long_press_active &&
             now - right_pressed_at >= kScreenTimeoutHoldTicks) {
             screen_timeout_index = (screen_timeout_index + 1) %
                                    (sizeof(kScreenTimeoutMinutes) / sizeof(kScreenTimeoutMinutes[0]));
@@ -461,7 +475,7 @@ extern "C" void app_main() {
             ESP_LOGI(kTag, "screen sleep selection=%s",
                      kScreenTimeoutMinutes[screen_timeout_index] == 0 ? "never" :
                      (kScreenTimeoutMinutes[screen_timeout_index] == 1 ? "1_min" : "5_min"));
-        } else if (controls.right_pressed && right_long_press_active && now >= right_next_cycle_at) {
+        } else if (controls.right_pressed && !right_wake_only && right_long_press_active && now >= right_next_cycle_at) {
             screen_timeout_index = (screen_timeout_index + 1) %
                                    (sizeof(kScreenTimeoutMinutes) / sizeof(kScreenTimeoutMinutes[0]));
             right_next_cycle_at = now + kScreenTimeoutCycleTicks;

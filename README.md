@@ -201,6 +201,11 @@ two seconds through `1 MIN`, `5 MIN`, and `NEVER`. Release to save. The color
 diagnostic shows yellow for 1 minute, cyan for 5 minutes, magenta for never,
 and green briefly after saving. Any button press wakes the backlight.
 
+When the backlight is off, the first accepted press of either button is
+intentionally wake-only. Its release cannot trigger the audio sample,
+screen-timeout selector, or optional GPIO1 shutdown path. Press again after
+the panel is visible to operate the selected control.
+
 ### Optional GPIO1 shutdown pattern
 
 `main/main.cpp` also contains a reusable, disabled-by-default shutdown state
