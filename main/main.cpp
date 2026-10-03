@@ -53,6 +53,7 @@ constexpr TickType_t kScreenTimeoutHoldTicks = pdMS_TO_TICKS(2000);
 constexpr TickType_t kScreenTimeoutCycleTicks = pdMS_TO_TICKS(2000);
 constexpr TickType_t kScreenSaveConfirmationTicks = pdMS_TO_TICKS(1500);
 constexpr TickType_t kShutdownHoldTicks = pdMS_TO_TICKS(3000);
+constexpr TickType_t kShutdownCountdownTicks = pdMS_TO_TICKS(3000);
 size_t audio_level_index = 0;
 size_t screen_timeout_index = 0;
 TickType_t last_battery_read = 0;
@@ -61,9 +62,11 @@ TickType_t screen_last_activity = 0;
 TickType_t right_pressed_at = 0;
 TickType_t right_next_cycle_at = 0;
 TickType_t left_pressed_at = 0;
+TickType_t left_shutdown_countdown_started_at = 0;
 uint8_t left_shutdown_countdown_shown = 0xff;
 TickType_t screen_confirmation_until = 0;
 bool right_long_press_active = false;
+bool left_shutdown_countdown_active = false;
 bool left_shutdown_armed = false;
 bool screen_backlight_on = true;
 bool screen_overlay_active = false;
@@ -374,13 +377,16 @@ extern "C" void app_main() {
             if (controls.left_pressed) {
                 left_pressed_at = xTaskGetTickCount();
                 left_shutdown_armed = false;
-                left_shutdown_countdown_shown = 3;
+                left_shutdown_countdown_active = false;
+                left_shutdown_countdown_shown = 0xff;
                 screen_wake();
-                screen_overlay_active = true;
-                lcd_show_shutdown_countdown(3);
             } else if (left_shutdown_armed) {
                 shutdown_to_deep_sleep();
             } else {
+                if (left_shutdown_countdown_active) {
+                    ESP_LOGI(kTag, "GPIO1 shutdown countdown cancelled");
+                }
+                left_shutdown_countdown_active = false;
                 screen_overlay_active = false;
                 lcd_fill(codec_found ? 0x07E0 : 0xF800);
                 lcd_show_battery_indicator();
@@ -419,17 +425,27 @@ extern "C" void app_main() {
         const TickType_t now = xTaskGetTickCount();
 #if AIPI_ENABLE_LEFT_SHUTDOWN
         if (controls.left_pressed && !left_shutdown_armed) {
-            const TickType_t elapsed = now - left_pressed_at;
-            const uint8_t remaining = elapsed >= kShutdownHoldTicks
-                                          ? 0
-                                          : static_cast<uint8_t>(3 - (elapsed / pdMS_TO_TICKS(1000)));
-            if (remaining != left_shutdown_countdown_shown) {
-                left_shutdown_countdown_shown = remaining;
-                lcd_show_shutdown_countdown(remaining);
+            if (!left_shutdown_countdown_active && now - left_pressed_at >= kShutdownHoldTicks) {
+                left_shutdown_countdown_active = true;
+                left_shutdown_countdown_started_at = now;
+                left_shutdown_countdown_shown = 3;
+                screen_overlay_active = true;
+                lcd_show_shutdown_countdown(3);
+                ESP_LOGI(kTag, "GPIO1 shutdown countdown started");
             }
-            if (elapsed >= kShutdownHoldTicks) {
-                left_shutdown_armed = true;
-                ESP_LOGI(kTag, "GPIO1 shutdown armed; release to confirm");
+            if (left_shutdown_countdown_active) {
+                const TickType_t elapsed = now - left_shutdown_countdown_started_at;
+                const uint8_t remaining = elapsed >= kShutdownCountdownTicks
+                                              ? 0
+                                              : static_cast<uint8_t>(3 - (elapsed / pdMS_TO_TICKS(1000)));
+                if (remaining != left_shutdown_countdown_shown) {
+                    left_shutdown_countdown_shown = remaining;
+                    lcd_show_shutdown_countdown(remaining);
+                }
+                if (elapsed >= kShutdownCountdownTicks) {
+                    left_shutdown_armed = true;
+                    ESP_LOGI(kTag, "GPIO1 shutdown armed; release to confirm");
+                }
             }
         }
 #endif

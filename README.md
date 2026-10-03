@@ -48,7 +48,7 @@ the diagnostic `main.cpp` unchanged:
 | `aipi_audio.*` | ES8311 I2C/I2S speaker playback and GPIO9 amplifier gating |
 | `status_led.*` | GPIO46 WS2812 GRB status output |
 | Display code in `main/main.cpp` | Validated ST7735 initialization, RGB565 byte order, `MADCTL 0x68`, and zero offsets |
-| Optional shutdown block in `main/main.cpp` | GPIO1 `3`, `2`, `1`, `GOODBYE`, release-to-deep-sleep, and GPIO1 wake |
+| Optional shutdown block in `main/main.cpp` | GPIO1 short-press handoff, intentional hold, `3`, `2`, `1`, `GOODBYE`, release-to-deep-sleep, and GPIO1 wake |
 
 The root project is intentionally a complete validation firmware, so its
 `main/main.cpp`, captive portal, and diagnostics should be used as a reference
@@ -177,17 +177,20 @@ and green briefly after saving. Any button press wakes the backlight.
 `main/main.cpp` also contains a reusable, disabled-by-default shutdown state
 machine for applications that want a physical `SCAN/OFF`-style left control.
 Set `AIPI_ENABLE_LEFT_SHUTDOWN=1` in the application build configuration to
-enable it. GPIO1 then shows a three-second release-to-confirm sequence:
+enable it. A consuming app keeps a normal short release for its own scan or
+selection action. Only after GPIO1 has remained pressed for three seconds does
+the shutdown confirmation sequence begin:
 
 | Hold state | Diagnostic color | Product UI meaning |
 |---|---|---|
-| Start | Yellow | `OFF IN 3` |
-| 1 second | Gold | `OFF IN 2` |
-| 2 seconds | Red | `OFF IN 1` |
-| 3 seconds | Magenta | `GOODBYE - RELEASE TO OFF` |
+| 3 second threshold | Yellow | `OFF IN 3` |
+| 4 seconds | Gold | `OFF IN 2` |
+| 5 seconds | Red | `OFF IN 1` |
+| 6 seconds | Magenta | `GOODBYE - RELEASE TO OFF` |
 
-Release before the magenta state to cancel and return to the normal diagnostic.
-Release after it to stop Wi-Fi, switch off the backlight, and enter ESP32-S3
+Release before the threshold leaves the short-press action to the application.
+Release during the three-second confirmation cancels shutdown. Release after
+the magenta state stops Wi-Fi, switches off the backlight, and enters ESP32-S3
 deep sleep. GPIO1 is configured as the active-low EXT1 wake source, so the
 next left-button press boots the application again. The release requirement is
 essential: entering sleep while the active-low wake button is still held would
