@@ -19,7 +19,7 @@ That makes it unusually versatile for voice assistants, local AI interfaces,
 status displays, smart-home controls, notification devices, sensor dashboards,
 and compact network tools.
 
-[Purchase the AIPI Lite from the AIPI Amazon store](https://www.amazon.com/stores/page/C88F1EA2-88AD-4BED-84F0-046A3DC763AA?ingress=2&lp_context_asin=B0FQNNVV36&visitId=356e09b1-3791-4637-9b0d-8cc265449ec1&ref_=ast_bln)
+[Purchase the AIPI Lite on Amazon](https://www.amazon.com/s?k=aipi+lite&%3Ftag=gadgetguydavemat-20)
 
 **Free by @GGDM.** Firmware, testing, and documentation by **@GGDM**, with no
 subscription, bridge, or cloud account required for the hardware test and
@@ -579,3 +579,6 @@ The test began as the hardware-isolation image in
 in this repository were then physically validated: full-screen coverage and
 the red/green/blue/white sequence both passed. Project work is credited to
 **@GGDM**.
+
+Thank you to [Krystalize.ai](https://Krystalize.ai) for making programming AI
+not be so flakey with compaction!
