@@ -130,6 +130,13 @@ two-button press can show firmware version, station IP, RSSI, battery voltage,
 charge state, codec status, and PSRAM size. A destructive factory reset should
 require a long hold and an on-screen countdown so it cannot happen accidentally.
 
+The native diagnostic now also carries the validated screen-timeout control from
+Flock-You-Go. A short GPIO42 release cycles speaker-test volume. Hold GPIO42
+for two seconds to enter screen-sleep selection; while held it advances every
+two seconds through `1 MIN`, `5 MIN`, and `NEVER`. Release to save. The color
+diagnostic shows yellow for 1 minute, cyan for 5 minutes, magenta for never,
+and green briefly after saving. Any button press wakes the backlight.
+
 ### Native GPIO addressing rule
 
 Arduino-style numeric `pinMode()` and `digitalRead()` calls can pass through a

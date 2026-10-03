@@ -40,9 +40,21 @@ AipiBatteryReading battery_reading = {};
 bool battery_ready = false;
 bool battery_bar_visible = true;
 constexpr uint8_t kAudioLevels[] = {0, 10, 50, 100};
+constexpr uint8_t kScreenTimeoutMinutes[] = {1, 5, 0};
+constexpr TickType_t kScreenTimeoutHoldTicks = pdMS_TO_TICKS(2000);
+constexpr TickType_t kScreenTimeoutCycleTicks = pdMS_TO_TICKS(2000);
+constexpr TickType_t kScreenSaveConfirmationTicks = pdMS_TO_TICKS(1500);
 size_t audio_level_index = 0;
+size_t screen_timeout_index = 0;
 TickType_t last_battery_read = 0;
 TickType_t last_battery_blink = 0;
+TickType_t screen_last_activity = 0;
+TickType_t right_pressed_at = 0;
+TickType_t right_next_cycle_at = 0;
+TickType_t screen_confirmation_until = 0;
+bool right_long_press_active = false;
+bool screen_backlight_on = true;
+bool screen_overlay_active = false;
 
 void lcd_write(bool data, const void* bytes, size_t length) {
     gpio_set_level(kLcdDc, data ? 1 : 0);
@@ -162,6 +174,12 @@ void lcd_show_button_state(bool left_pressed, bool right_pressed, bool codec_fou
     }
 }
 
+void lcd_show_sleep_selection(uint8_t timeout_minutes) {
+    // The diagnostic image has no text renderer. Use its established color bars:
+    // yellow=1 minute, cyan=5 minutes, magenta=never, green=saved confirmation.
+    lcd_fill(timeout_minutes == 1 ? 0xFFE0 : (timeout_minutes == 5 ? 0x07FF : 0xF81F));
+}
+
 void lcd_show_battery_indicator() {
     constexpr int x = 8;
     constexpr int y = 116;
@@ -209,7 +227,9 @@ void update_battery(bool force = false) {
              static_cast<unsigned long>(reading.millivolts / 1000),
              static_cast<unsigned long>(reading.millivolts % 1000), reading.percent,
              reading.charging ? 1 : 0, reading.calibrated ? 1 : 0);
-    lcd_show_battery_indicator();
+    if (!screen_overlay_active) {
+        lcd_show_battery_indicator();
+    }
 }
 
 void tick_battery_indicator() {
@@ -219,8 +239,34 @@ void tick_battery_indicator() {
     if (now - last_battery_blink >= pdMS_TO_TICKS(600)) {
         battery_bar_visible = !battery_bar_visible;
         last_battery_blink = now;
+        if (!screen_overlay_active) {
+            lcd_show_battery_indicator();
+        }
+    }
+}
+
+void screen_wake() {
+    screen_last_activity = xTaskGetTickCount();
+    if (!screen_backlight_on) {
+        gpio_set_level(kBacklight, 1);
+        screen_backlight_on = true;
+    }
+}
+
+void screen_timeout_tick(bool codec_found) {
+    const TickType_t now = xTaskGetTickCount();
+    if (screen_confirmation_until != 0 && now >= screen_confirmation_until) {
+        screen_confirmation_until = 0;
+        screen_overlay_active = false;
+        lcd_fill(codec_found ? 0x07E0 : 0xF800);
         lcd_show_battery_indicator();
     }
+
+    const uint8_t timeout_minutes = kScreenTimeoutMinutes[screen_timeout_index];
+    if (timeout_minutes == 0 || !screen_backlight_on) return;
+    if (now - screen_last_activity < pdMS_TO_TICKS(timeout_minutes * 60000UL)) return;
+    gpio_set_level(kBacklight, 0);
+    screen_backlight_on = false;
 }
 
 bool probe_es8311() {
@@ -278,6 +324,7 @@ extern "C" void app_main() {
     lcd_fill(codec_found ? 0x07E0 : 0xF800);
     update_battery(true);
     lcd_show_battery_indicator();
+    screen_last_activity = xTaskGetTickCount();
     ESP_LOGI(kTag, "LCD initialized; green means codec found, red means codec missing");
     ESP_LOGI(kTag, "buttons: GPIO1=yellow GPIO42=RGBW both=yellow/magenta");
 
@@ -288,10 +335,27 @@ extern "C" void app_main() {
         const AipiControlsState controls = aipi_controls_poll();
         if (controls.left_changed) {
             ESP_LOGI(kTag, "GPIO1 left: %s", controls.left_pressed ? "PRESSED" : "RELEASED");
+            if (controls.left_pressed) {
+                screen_wake();
+            }
         }
         if (controls.right_changed) {
             ESP_LOGI(kTag, "GPIO42 right: %s", controls.right_pressed ? "PRESSED" : "RELEASED");
-            if (controls.right_pressed && aipi_audio_ready()) {
+            if (controls.right_pressed) {
+                right_pressed_at = xTaskGetTickCount();
+                right_next_cycle_at = 0;
+                right_long_press_active = false;
+                screen_wake();
+            } else if (right_long_press_active) {
+                screen_wake();
+                right_long_press_active = false;
+                screen_overlay_active = true;
+                screen_confirmation_until = xTaskGetTickCount() + kScreenSaveConfirmationTicks;
+                lcd_fill(0x07E0);
+                ESP_LOGI(kTag, "screen sleep saved=%s",
+                         kScreenTimeoutMinutes[screen_timeout_index] == 0 ? "never" :
+                         (kScreenTimeoutMinutes[screen_timeout_index] == 1 ? "1_min" : "5_min"));
+            } else if (aipi_audio_ready()) {
                 audio_level_index = (audio_level_index + 1) %
                     (sizeof(kAudioLevels) / sizeof(kAudioLevels[0]));
                 const uint8_t volume = kAudioLevels[audio_level_index];
@@ -302,11 +366,35 @@ extern "C" void app_main() {
                 }
             }
         }
-        if (controls.left_changed || controls.right_changed) {
+        const TickType_t now = xTaskGetTickCount();
+        if (controls.right_pressed && !right_long_press_active &&
+            now - right_pressed_at >= kScreenTimeoutHoldTicks) {
+            screen_timeout_index = (screen_timeout_index + 1) %
+                                   (sizeof(kScreenTimeoutMinutes) / sizeof(kScreenTimeoutMinutes[0]));
+            right_long_press_active = true;
+            right_next_cycle_at = now + kScreenTimeoutCycleTicks;
+            screen_wake();
+            screen_overlay_active = true;
+            lcd_show_sleep_selection(kScreenTimeoutMinutes[screen_timeout_index]);
+            ESP_LOGI(kTag, "screen sleep selection=%s",
+                     kScreenTimeoutMinutes[screen_timeout_index] == 0 ? "never" :
+                     (kScreenTimeoutMinutes[screen_timeout_index] == 1 ? "1_min" : "5_min"));
+        } else if (controls.right_pressed && right_long_press_active && now >= right_next_cycle_at) {
+            screen_timeout_index = (screen_timeout_index + 1) %
+                                   (sizeof(kScreenTimeoutMinutes) / sizeof(kScreenTimeoutMinutes[0]));
+            right_next_cycle_at = now + kScreenTimeoutCycleTicks;
+            screen_wake();
+            lcd_show_sleep_selection(kScreenTimeoutMinutes[screen_timeout_index]);
+            ESP_LOGI(kTag, "screen sleep selection=%s",
+                     kScreenTimeoutMinutes[screen_timeout_index] == 0 ? "never" :
+                     (kScreenTimeoutMinutes[screen_timeout_index] == 1 ? "1_min" : "5_min"));
+        }
+        if ((controls.left_changed || controls.right_changed) && !screen_overlay_active) {
             lcd_show_button_state(controls.left_pressed, controls.right_pressed, codec_found);
             lcd_show_battery_indicator();
         }
         tick_battery_indicator();
+        screen_timeout_tick(codec_found);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
