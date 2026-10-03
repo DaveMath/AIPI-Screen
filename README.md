@@ -574,11 +574,9 @@ I (...) aipi_screen: GPIO42 right: RELEASED
 
 ## Origin
 
-The test began as the hardware-isolation image in
-[DaveMath/AiPiMusey](https://github.com/DaveMath/AiPiMusey). The display values
-in this repository were then physically validated: full-screen coverage and
-the red/green/blue/white sequence both passed. Project work is credited to
-**@GGDM**.
+The display values in this repository were physically validated: full-screen
+coverage and the red/green/blue/white sequence both passed. Project work is
+credited to **@GGDM**.
 
 Thank you to [Krystalize.ai](https://Krystalize.ai) for making programming AI
 not be so flakey with compaction!
