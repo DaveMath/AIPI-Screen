@@ -17,4 +17,9 @@ struct AipiControlsState {
 
 esp_err_t aipi_controls_init();
 AipiControlsState aipi_controls_poll();
+
+// Prepare GPIO1 as the active-low EXT1 wake source before the application
+// enters ESP32-S3 deep sleep. Call aipi_controls_init() after the next boot to
+// return the pin to ordinary debounced button use.
+esp_err_t aipi_controls_prepare_left_button_deep_sleep_wake();
 int aipi_controls_raw_level(gpio_num_t pin);

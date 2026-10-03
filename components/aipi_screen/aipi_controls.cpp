@@ -2,6 +2,8 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -59,6 +61,7 @@ bool poll_button(DebouncedButton* button, TickType_t now) {
 esp_err_t aipi_controls_init() {
     // GPIO1 and GPIO42 can retain boot/debug configuration. Reset both pads
     // before assigning them to the AiPi's active-low buttons.
+    rtc_gpio_deinit(kAipiLeftButtonPin);
     ESP_RETURN_ON_ERROR(gpio_reset_pin(kAipiLeftButtonPin), kTag,
                         "reset left button GPIO");
     ESP_RETURN_ON_ERROR(gpio_reset_pin(kAipiRightButtonPin), kTag,
@@ -100,6 +103,29 @@ AipiControlsState aipi_controls_poll() {
         .left_changed = left_changed,
         .right_changed = right_changed,
     };
+}
+
+esp_err_t aipi_controls_prepare_left_button_deep_sleep_wake() {
+    ESP_RETURN_ON_ERROR(rtc_gpio_init(kAipiLeftButtonPin), kTag,
+                        "move left button to RTC domain");
+    ESP_RETURN_ON_ERROR(rtc_gpio_set_direction(kAipiLeftButtonPin,
+                                               RTC_GPIO_MODE_INPUT_ONLY),
+                        kTag, "set RTC wake pin input mode");
+    ESP_RETURN_ON_ERROR(rtc_gpio_pullup_en(kAipiLeftButtonPin), kTag,
+                        "enable RTC wake pin pull-up");
+    ESP_RETURN_ON_ERROR(rtc_gpio_pulldown_dis(kAipiLeftButtonPin), kTag,
+                        "disable RTC wake pin pull-down");
+    ESP_RETURN_ON_ERROR(esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,
+                                             ESP_PD_OPTION_ON),
+                        kTag, "keep RTC pull-up powered in deep sleep");
+
+    const uint64_t wake_mask = 1ULL << kAipiLeftButtonPin;
+    ESP_RETURN_ON_ERROR(esp_sleep_enable_ext1_wakeup(wake_mask,
+                                                      ESP_EXT1_WAKEUP_ANY_LOW),
+                        kTag, "enable left button EXT1 wake");
+    ESP_LOGI(kTag, "GPIO%d prepared as active-low deep-sleep wake source",
+             static_cast<int>(kAipiLeftButtonPin));
+    return ESP_OK;
 }
 
 int aipi_controls_raw_level(gpio_num_t pin) {

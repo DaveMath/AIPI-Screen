@@ -35,7 +35,7 @@ the modules listed below.
 | Feature | What is covered | Reference location |
 |---|---|---|
 | LCD | 128 x 128 ST7735 initialization, orientation, BGR color order, RGB565 byte swapping, no panel offsets | `main/main.cpp`, `DISPLAY_FIX.md` |
-| Buttons | Native GPIO1/GPIO42 addressing, active-low debounce, short presses, long holds, redraw discipline | `aipi_controls.*`, Two-button controls |
+| Buttons | Native GPIO1/GPIO42 addressing, active-low debounce, short presses, long holds, redraw discipline, and GPIO1 RTC deep-sleep wake preparation | `aipi_controls.*`, Two-button controls |
 | Audio | ES8311 control-bus probe, I2S speaker routing, amplifier gating, volume test tones | `aipi_audio.*` |
 | Battery and power | ADC voltage estimate, charge indication, power-hold control, battery display bar | `aipi_battery.*`, Power and battery |
 | Backlight | User-selectable 1-minute, 5-minute, or never sleep behavior | `main/main.cpp`, Screen sleep |
@@ -225,10 +225,14 @@ the shutdown confirmation sequence begin:
 Release before the threshold leaves the short-press action to the application.
 Release during the three-second confirmation cancels shutdown. Release after
 the magenta state stops Wi-Fi, switches off the backlight, and enters ESP32-S3
-deep sleep. GPIO1 is configured as the active-low EXT1 wake source, so the
-next left-button press boots the application again. The release requirement is
-essential: entering sleep while the active-low wake button is still held would
-otherwise wake the chip immediately.
+deep sleep. Before entering deep sleep, call
+`aipi_controls_prepare_left_button_deep_sleep_wake()`. It moves GPIO1 into the
+RTC domain, enables its RTC pull-up, keeps the RTC peripheral powered, and
+configures active-low EXT1 wake. The regular GPIO pull-up used while the
+application is running is not a dependable deep-sleep wake bias. On the next
+boot, call `aipi_controls_init()` to restore ordinary debounced button use.
+The release requirement is essential: entering sleep while the active-low wake
+button is still held would otherwise wake the chip immediately.
 
 The helper `screen_wake()` resets the selected `1 MIN`, `5 MIN`, or `NEVER`
 timeout when a real application encounter wakes the panel. Do not call it for
