@@ -26,6 +26,41 @@ subscription, bridge, or cloud account required for the hardware test and
 local setup features. The repository is released under the included MIT
 license.
 
+## Reuse In Another AiPi App
+
+Treat this repository as the validated hardware reference for any new
+ESP32-S3 AiPi application. Pin the repository in the consuming application's
+Git history so its display, button, audio, battery, and power-control behavior
+can be traced back to a known tested revision:
+
+```bash
+git submodule add https://github.com/DaveMath/AIPI-Screen.git components/aipi-screen
+git commit -m "Reference validated AiPi screen support"
+```
+
+Then selectively adopt the modules needed by the product rather than linking
+the diagnostic `main.cpp` unchanged:
+
+| Reusable module | Use it for |
+|---|---|
+| `aipi_controls.*` | Native active-low GPIO1/GPIO42 initialization and debounce |
+| `aipi_battery.*` | GPIO2 battery ADC, GPIO8 charge status, GPIO10 power hold |
+| `aipi_audio.*` | ES8311 I2C/I2S speaker playback and GPIO9 amplifier gating |
+| `status_led.*` | GPIO46 WS2812 GRB status output |
+| Display code in `main/main.cpp` | Validated ST7735 initialization, RGB565 byte order, `MADCTL 0x68`, and zero offsets |
+| Optional shutdown block in `main/main.cpp` | GPIO1 `3`, `2`, `1`, `GOODBYE`, release-to-deep-sleep, and GPIO1 wake |
+
+The root project is intentionally a complete validation firmware, so its
+`main/main.cpp`, captive portal, and diagnostics should be used as a reference
+or selectively extracted into the consuming project's own component. Do not
+run two application `app_main()` implementations. Keep the submodule pinned to
+a tested commit and update it deliberately after reviewing hardware changes.
+
+For the optional left-button shutdown behavior, define
+`AIPI_ENABLE_LEFT_SHUTDOWN=1` in the consuming build only after its application
+owns GPIO1 and has chosen the desired Wi-Fi shutdown behavior. Keep it `0` in
+hardware bring-up and diagnostic builds.
+
 ## Validated result
 
 On boot:
