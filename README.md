@@ -43,20 +43,31 @@ the modules listed below.
 | Wi-Fi setup | Phone-accessible captive portal, passive nearby-network list, password entry, saved station configuration | Wi-Fi setup portal |
 | Status LED | GPIO46 GRB WS2812 color output | `status_led.*` |
 
-## Reuse In Another AiPi App
+## Reuse As An ESP-IDF Component
+
+`components/aipi_screen` is a native ESP-IDF component, not a collection of
+files that an application must copy into `main`. It owns the validated
+board-service implementations and public headers for controls, battery/power,
+ES8311 playback, WS2812 status LED, and the phone Wi-Fi setup portal. Its
+`idf_component.yml` identifies the component and its source repository.
 
 Treat this repository as the validated hardware reference for any new
-ESP32-S3 AiPi application. Pin the repository in the consuming application's
-Git history so its display, button, audio, battery, and power-control behavior
-can be traced back to a known tested revision:
+ESP32-S3 AiPi application. Pin it in the consuming application's Git history
+so its board behavior can be traced back to a known tested revision:
 
 ```bash
 git submodule add https://github.com/DaveMath/AIPI-Screen.git components/aipi-screen
 git commit -m "Reference validated AiPi screen support"
 ```
 
-Then selectively adopt the modules needed by the product rather than linking
-the diagnostic `main.cpp` unchanged:
+In the consuming application's `main/CMakeLists.txt`, require the component:
+
+```cmake
+idf_component_register(SRCS "main.cpp" REQUIRES aipi_screen)
+```
+
+Then include only the services needed by the product. `aipi_screen.h` is the
+umbrella include; the individual headers remain available for narrower use:
 
 | Reusable module | Use it for |
 |---|---|
@@ -67,11 +78,12 @@ the diagnostic `main.cpp` unchanged:
 | Display code in `main/main.cpp` | Validated ST7735 initialization, RGB565 byte order, `MADCTL 0x68`, and zero offsets |
 | Optional shutdown block in `main/main.cpp` | GPIO1 short-press handoff, intentional hold, `3`, `2`, `1`, `GOODBYE`, release-to-deep-sleep, and GPIO1 wake |
 
-The root project is intentionally a complete validation firmware, so its
-`main/main.cpp`, captive portal, and diagnostics should be used as a reference
-or selectively extracted into the consuming project's own component. Do not
-run two application `app_main()` implementations. Keep the submodule pinned to
-a tested commit and update it deliberately after reviewing hardware changes.
+The root `main/main.cpp` is intentionally a complete validation application.
+Do not import its `app_main()` into another project. Keep the submodule pinned
+to a tested commit and update it deliberately after reviewing hardware changes.
+The ST7735 initialization and color-order implementation remain there as the
+reference display driver for the moment; its settings are documented below and
+the next extraction target is a dedicated `aipi_display` component API.
 
 For the optional left-button shutdown behavior, define
 `AIPI_ENABLE_LEFT_SHUTDOWN=1` in the consuming build only after its application
@@ -478,6 +490,24 @@ as fallback, remains a useful next step. The current native portal stores one
 station network and recovers by reopening its setup AP when that network cannot
 be reached.
 
+## Persistent Settings And NVS
+
+NVS is live today. The Wi-Fi portal uses the ESP-IDF `aipi_screen` namespace,
+commits settings on save, and reloads them during startup:
+
+| Persisted now | NVS key(s) |
+|---|---|
+| Station Wi-Fi | `wifi_ssid`, `wifi_pass` |
+| Setup host mode | `host_mode` |
+| Status LED color | `led_r`, `led_g`, `led_b` |
+| Status LED brightness | `led_level` |
+
+The speaker-test volume and screen-timeout selections in the standalone
+diagnostic are currently RAM-only. A consuming application should give these
+settings its own versioned NVS record before presenting them as saved user
+preferences. Avoid writing on every button poll; update RAM immediately and
+commit only after an accepted user change or an explicit Save action.
+
 ## Suggested settings model
 
 The device has enough persistent configuration to justify a versioned NVS
@@ -497,10 +527,10 @@ record instead of unrelated keys scattered through application code:
 | Diagnostic logging | Info | Debug should be an explicit option |
 
 The Wi-Fi and LED settings above are implemented as individual NVS keys. Before
-the settings surface grows further, migrate them to an atomic, schema-versioned
-record. Passwords and API keys must never appear in logs, status pages,
-screenshots, or JSON responses. Wi-Fi reset and full factory reset should
-remain separate operations.
+the settings surface grows further, migrate user-facing preferences to an
+atomic, schema-versioned record. Passwords and API keys must never appear in
+logs, status pages, screenshots, or JSON responses. Wi-Fi reset and full
+factory reset should remain separate operations.
 
 ## Diagnostic acceptance plan
 
@@ -551,15 +581,16 @@ I (...) aipi_screen: GPIO42 right: RELEASED
 |-- esp-idf-monitor.cfg       Ctrl-C monitor exit setting
 |-- main/
 |   |-- CMakeLists.txt
-|   |-- aipi_battery.cpp      Power hold, ADC averaging, charge state, LiPo curve
-|   |-- aipi_battery.h        Shared battery reading API
-|   |-- aipi_controls.cpp     Native two-button GPIO and debounce implementation
-|   |-- aipi_controls.h       Shared AiPi control pins and state API
 |   |-- main.cpp              Hardware test and direct LCD driver
-|   |-- status_led.cpp        GPIO46 WS2812 RMT driver and brightness control
-|   |-- status_led.h
-|   |-- wifi_portal.cpp       Captive portal, Wi-Fi/LED UI, and NVS settings
-|   `-- wifi_portal.h
+|-- components/
+|   `-- aipi_screen/         Reusable ESP-IDF board-service component
+|       |-- include/         Public `aipi_screen` service headers
+|       |-- aipi_audio.cpp   ES8311 I2C/I2S playback and amplifier gating
+|       |-- aipi_battery.cpp Power hold, ADC averaging, charge state, LiPo curve
+|       |-- aipi_controls.cpp Native two-button GPIO and debounce implementation
+|       |-- status_led.cpp   GPIO46 WS2812 RMT driver and brightness control
+|       |-- wifi_portal.cpp  Captive portal, Wi-Fi/LED UI, and NVS settings
+|       `-- idf_component.yml Component metadata
 `-- sdkconfig.defaults        Flash, USB console, and logging defaults
 ```
 
